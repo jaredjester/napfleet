@@ -245,6 +245,24 @@ export async function POST(request: NextRequest) {
     console.error(`[${correlationId}] Checkout prepare error:`, err);
     const message = err instanceof Error ? err.message : "Checkout preparation failed";
 
+    // Log error to database for tracking
+    try {
+      await prisma.auditEvent.create({
+        data: {
+          actorType: "system",
+          actorId: "checkout-api",
+          action: "CHECKOUT_ERROR",
+          entityType: "Checkout",
+          entityId: correlationId,
+          safeMetadata: JSON.stringify({
+            error: message,
+            correlationId,
+            timestamp: new Date().toISOString(),
+          }),
+        },
+      });
+    } catch { /* best effort */ }
+
     // Sandbox fallback: if the database is unavailable (e.g. SQLite on Vercel
     // serverless), return a memory-based checkout response so the UI can be tested.
     // This must NEVER be enabled in production.

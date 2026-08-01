@@ -43,11 +43,30 @@ function ProcessingContent() {
     }
   }, [orderNumber]);
 
+  // Auto-simulate payment in sandbox mode
+  const simulatePayment = useCallback(async () => {
+    try {
+      await fetch("/api/checkout/simulate-payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderNumber }),
+      });
+      checkStatus();
+    } catch {
+      // Retry on next poll
+    }
+  }, [orderNumber, checkStatus]);
+
   useEffect(() => {
     if (!orderNumber) {
       setStatus("not_found");
       return;
     }
+
+    // In sandbox, auto-simulate payment after a short delay
+    const simTimer = setTimeout(() => {
+      simulatePayment();
+    }, 1500);
 
     checkStatus();
 
@@ -62,8 +81,11 @@ function ProcessingContent() {
       checkStatus();
     }, 3000);
 
-    return () => clearInterval(interval);
-  }, [orderNumber, checkStatus]);
+    return () => {
+      clearInterval(interval);
+      clearTimeout(simTimer);
+    };
+  }, [orderNumber, checkStatus, simulatePayment]);
 
   if (status === "not_found" || !orderNumber) {
     return (
