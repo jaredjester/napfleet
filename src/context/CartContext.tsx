@@ -56,25 +56,44 @@ export function CartProvider({ children }: { children: ReactNode }) {
 
       let id = storedCartId;
       if (!id) {
-        const created = await mockCommerce.createCart();
-        id = created.id;
+        try {
+          const created = await mockCommerce.createCart();
+          id = created.id;
+        } catch {
+          id = "mock-cart-1";
+        }
       }
       if (cancelled) return;
       setCartId(id);
 
       // Rebuild the provider cart so persisted line ids stay in sync.
+      // If the provider call fails (e.g. provider mismatch), fall back to
+      // the localStorage data directly so the cart is never empty.
       if (storedItems.length > 0) {
-        const rebuilt = await mockCommerce.addCartLines(
-          id,
-          storedItems.map((l) => ({
-            productHandle: l.productHandle,
-            variantId: l.variantId,
-            quantity: l.quantity,
-          }))
-        );
-        if (cancelled) return;
-        setItems(rebuilt.lines);
-        setSubtotal(rebuilt.subtotal);
+        try {
+          const rebuilt = await mockCommerce.addCartLines(
+            id,
+            storedItems.map((l) => ({
+              productHandle: l.productHandle,
+              variantId: l.variantId,
+              quantity: l.quantity,
+            }))
+          );
+          if (!cancelled && rebuilt.lines.length > 0) {
+            setItems(rebuilt.lines);
+            setSubtotal(rebuilt.subtotal);
+            return;
+          }
+        } catch {
+          // Provider rebuild failed — fall through to localStorage fallback
+        }
+
+        // Fallback: use localStorage items directly
+        if (!cancelled) {
+          const validItems = storedItems.filter((l) => l.quantity > 0 && l.price > 0);
+          setItems(validItems);
+          setSubtotal(validItems.reduce((sum, l) => sum + l.price * l.quantity, 0));
+        }
       }
     }
 
