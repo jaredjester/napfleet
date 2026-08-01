@@ -31,15 +31,6 @@ export default function CheckoutPage() {
     }
   }, [isInitialized, itemCount, router, step]);
 
-  // Show loading while cart initializes
-  if (!isInitialized) {
-    return (
-      <div className="max-w-4xl mx-auto px-4 py-12 text-center">
-        <p className="text-sm text-text-gray/50">Loading your cart...</p>
-      </div>
-    );
-  }
-
   const handlePrepareCheckout = useCallback(async () => {
     if (!email || !address.line1 || !address.city || !address.postalCode) {
       setError("Please fill in all required shipping fields.");
@@ -97,6 +88,15 @@ export default function CheckoutPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, email, firstName, lastName, address]);
+
+  // Show loading while cart initializes
+  if (!isInitialized) {
+    return (
+      <div className="max-w-4xl mx-auto px-4 py-12 text-center">
+        <p className="text-sm text-text-gray/50">Loading your cart...</p>
+      </div>
+    );
+  }
 
   if (itemCount === 0) return null;
 
