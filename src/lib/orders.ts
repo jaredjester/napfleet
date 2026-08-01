@@ -63,7 +63,18 @@ export async function calculatePricing(
     if (!product) throw new Error(`Product not found: ${item.productId}`);
     if (!product.publishReady) throw new Error(`Product not available: ${item.productId}`);
 
-    const variant = product.variants.find((v) => v.id === item.variantId);
+    // Match variant by ID first. If the client-side file provider and
+    // server-side DB provider have different IDs, fall back to SKU match
+    // or the first available variant (most products have a single "Default" variant).
+    let variant = product.variants.find((v) => v.id === item.variantId);
+    if (!variant) {
+      // Try SKU match (SKUs are consistent across providers)
+      variant = product.variants.find((v) => v.sku && v.sku === item.variantId);
+    }
+    if (!variant) {
+      // Fall back to first available variant
+      variant = product.variants.find((v) => v.available) ?? product.variants[0];
+    }
     if (!variant) throw new Error(`Variant not found: ${item.variantId}`);
     if (!variant.available) throw new Error(`Variant unavailable: ${item.variantId}`);
 

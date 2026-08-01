@@ -386,7 +386,14 @@ async function buildSandboxCheckoutResponse(
 
   for (const item of body.items) {
     const product = await storeConfig.getProduct(item.productId);
-    const variant = product?.variants.find((v) => v.id === item.variantId);
+    // Flexible variant matching: try ID first, then SKU, then first available
+    let variant = product?.variants.find((v) => v.id === item.variantId);
+    if (!variant && product) {
+      variant = product.variants.find((v) => v.sku && v.sku === item.variantId);
+    }
+    if (!variant && product) {
+      variant = product.variants.find((v) => v.available) ?? product.variants[0];
+    }
     const price = variant?.price ?? 6999;
     const lineTotal = price * item.quantity;
     subtotalCents += lineTotal;
