@@ -14,6 +14,7 @@ type CartContextValue = {
   subtotal: number;
   itemCount: number;
   isUpdating: boolean;
+  isInitialized: boolean;
   addItem: (productHandle: string, variantId: string, quantity?: number) => Promise<void>;
   setQuantity: (lineId: string, quantity: number) => Promise<void>;
   removeItem: (lineId: string) => Promise<void>;
@@ -34,6 +35,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<CommerceCartLine[]>([]);
   const [subtotal, setSubtotal] = useState(0);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [isInitialized, setIsInitialized] = useState(false);
 
   // Initialize: restore a persisted cart or create a fresh one.
   useEffect(() => {
@@ -95,6 +97,8 @@ export function CartProvider({ children }: { children: ReactNode }) {
           setSubtotal(validItems.reduce((sum, l) => sum + l.price * l.quantity, 0));
         }
       }
+
+      if (!cancelled) setIsInitialized(true);
     }
 
     init();
@@ -218,12 +222,13 @@ export function CartProvider({ children }: { children: ReactNode }) {
       subtotal,
       itemCount,
       isUpdating,
+      isInitialized,
       addItem,
       setQuantity,
       removeItem,
       clearCart,
     }),
-    [cartId, items, subtotal, itemCount, isUpdating, addItem, setQuantity, removeItem, clearCart]
+    [cartId, items, subtotal, itemCount, isUpdating, isInitialized, addItem, setQuantity, removeItem, clearCart]
   );
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;

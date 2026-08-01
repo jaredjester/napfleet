@@ -12,7 +12,7 @@ type CheckoutStep = "review" | "shipping" | "payment" | "processing";
 
 export default function CheckoutPage() {
   const router = useRouter();
-  const { items, subtotal, itemCount } = useCart();
+  const { items, subtotal, itemCount, isInitialized } = useCart();
 
   const [step, setStep] = useState<CheckoutStep>("review");
   const [email, setEmail] = useState("");
@@ -24,12 +24,21 @@ export default function CheckoutPage() {
   const [error, setError] = useState("");
   const [correlationId, setCorrelationId] = useState("");
 
-  // Redirect to shop if cart is empty
+  // Redirect to shop if cart is empty (only after cart has initialized)
   useEffect(() => {
-    if (itemCount === 0 && step !== "processing") {
+    if (isInitialized && itemCount === 0 && step !== "processing") {
       router.push("/shop-the-fleet");
     }
-  }, [itemCount, router, step]);
+  }, [isInitialized, itemCount, router, step]);
+
+  // Show loading while cart initializes
+  if (!isInitialized) {
+    return (
+      <div className="max-w-4xl mx-auto px-4 py-12 text-center">
+        <p className="text-sm text-text-gray/50">Loading your cart...</p>
+      </div>
+    );
+  }
 
   const handlePrepareCheckout = useCallback(async () => {
     if (!email || !address.line1 || !address.city || !address.postalCode) {
