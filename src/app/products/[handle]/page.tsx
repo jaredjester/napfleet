@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { products } from "@/content/products";
 import { getProductContent } from "@/content/napfleet";
+import { getStoreConfig } from "@/lib/store-config";
 import { ProductDetail } from "@/components/product/ProductDetail";
 import { MediaGrid } from "@/components/product/MediaGrid";
 import { FleetProfileRail } from "@/components/product/FleetProfileRail";
@@ -21,7 +22,8 @@ export function generateStaticParams() {
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { handle } = await params;
-  const product = products.find((p) => p.handle === handle);
+  const config = getStoreConfig();
+  const product = await config.getProduct(handle);
   const content = getProductContent(handle);
   if (!product || !content) {
     return { title: "Product Not Found — NapFleet" };
@@ -39,7 +41,8 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
 export default async function ProductPage({ params }: Props) {
   const { handle } = await params;
-  const product = products.find((p) => p.handle === handle);
+  const config = getStoreConfig();
+  const product = await config.getProduct(handle);
   return (
     <>
       <ProductDetail handle={handle} />

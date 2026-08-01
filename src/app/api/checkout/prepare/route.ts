@@ -6,7 +6,7 @@ import { prisma } from "@/lib/db";
 import { validateEnv } from "@/lib/env";
 import { canEnableCheckout } from "@/lib/validation/policies";
 import { canPublish } from "@/lib/validation/catalog";
-import { products } from "@/content/products";
+import { getStoreConfig } from "@/lib/store-config";
 import { createSessionKey, createCheckoutJwt } from "@/lib/coinflow/server";
 import { createOrder, calculatePricing } from "@/lib/orders";
 import { rateLimit, getRateLimitKey, Limiters } from "@/lib/rate-limit";
@@ -104,8 +104,9 @@ export async function POST(request: NextRequest) {
     }
 
     // 3. Catalog gate: every item must be publish-ready.
+    const storeConfig = getStoreConfig();
     for (const item of body.items) {
-      const product = products.find((p) => p.handle === item.productId);
+      const product = await storeConfig.getProduct(item.productId);
       if (!product || !canPublish(product)) {
         return NextResponse.json(
           { error: "Product not available", correlationId },
@@ -381,9 +382,10 @@ async function buildSandboxCheckoutResponse(
 ): Promise<PrepareCheckoutResponse> {
   const displayItems: PrepareCheckoutResponse["displayOrder"]["items"] = [];
   let subtotalCents = 0;
+  const storeConfig = getStoreConfig();
 
   for (const item of body.items) {
-    const product = products.find((p) => p.handle === item.productId);
+    const product = await storeConfig.getProduct(item.productId);
     const variant = product?.variants.find((v) => v.id === item.variantId);
     const price = variant?.price ?? 6999;
     const lineTotal = price * item.quantity;

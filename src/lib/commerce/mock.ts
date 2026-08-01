@@ -1,27 +1,28 @@
 /* eslint-disable @typescript-eslint/no-unused-vars, prefer-const */
 import type { CommerceProvider, CommerceProduct, CommerceCart, ReviewProvider, NewsletterProvider } from "./types";
-import { products as mockProducts } from "@/content/products";
+import { getStoreConfig } from "@/lib/store-config";
 import { mockNewsletterProvider } from "@/lib/newsletter/mock";
-
-const products: CommerceProduct[] = mockProducts;
 
 const cartId = "mock-cart-1";
 let cart: CommerceCart = { id: cartId, lines: [], subtotal: 0 };
 
 export const mockCommerce: CommerceProvider = {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async getCollection(_handle: string) {
+    const config = getStoreConfig();
+    const products = await config.getProducts();
     return products.filter((p) => p.publishReady && p.variants.some((v) => v.available));
   },
 
   async getProduct(handle: string) {
-    const product = products.find((p) => p.handle === handle);
+    const config = getStoreConfig();
+    const product = await config.getProduct(handle);
     if (!product || !product.publishReady) return null;
     return product;
   },
 
   async searchProducts(query: string) {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const config = getStoreConfig();
+    const products = await config.getProducts();
     const q = query.toLowerCase();
     return products.filter(
       (p) =>
@@ -40,8 +41,9 @@ export const mockCommerce: CommerceProvider = {
   },
 
   async addCartLines(_cartId: string, lines: { productHandle: string; variantId: string; quantity: number }[]) {
+    const config = getStoreConfig();
     for (const line of lines) {
-      const product = products.find((p) => p.handle === line.productHandle);
+      const product = await config.getProduct(line.productHandle);
       if (!product) continue;
       const variant = product.variants.find((v) => v.id === line.variantId);
       if (!variant || !variant.available) continue;

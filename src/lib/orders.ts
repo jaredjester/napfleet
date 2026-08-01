@@ -1,5 +1,5 @@
 import { prisma } from "./db";
-import { products } from "@/content/products";
+import { getStoreConfig } from "@/lib/store-config";
 import type { TaxProvider } from "./tax/types";
 import type { ShippingProvider } from "./shipping/types";
 import { mockTaxProvider } from "./tax/mock";
@@ -56,8 +56,10 @@ export async function calculatePricing(
     weight?: string;
   }> = [];
 
+  const config = getStoreConfig();
+
   for (const item of items) {
-    const product = products.find((p) => p.handle === item.productId);
+    const product = await config.getProduct(item.productId);
     if (!product) throw new Error(`Product not found: ${item.productId}`);
     if (!product.publishReady) throw new Error(`Product not available: ${item.productId}`);
 
