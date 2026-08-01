@@ -6,6 +6,7 @@ import { cn } from "@/lib/cn";
 
 const NAV_ITEMS = [
   { label: "Command Center", href: "/admin", icon: "◈" },
+  { label: "Finance", href: "/admin/finance", icon: "$" },
   { label: "Products", href: "/admin/products", icon: "◆" },
   { label: "Content", href: "/admin/content", icon: "◇" },
   { label: "Media", href: "/admin/media", icon: "◉" },

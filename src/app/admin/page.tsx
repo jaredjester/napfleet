@@ -27,6 +27,11 @@ export default function AdminPage() {
   const [orders, setOrders] = useState<OrderSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("");
+  const [finance, setFinance] = useState<{
+    estimatedBalanceCents: number;
+    totalRevenueCents: number;
+    pendingPayoutsCents: number;
+  } | null>(null);
 
   const fetchOrders = async (statusFilter?: string) => {
     setLoading(true);
@@ -47,6 +52,16 @@ export default function AdminPage() {
   useEffect(() => {
     fetchOrders(filter);
   }, [filter]);
+
+  // Fetch finance overview
+  useEffect(() => {
+    fetch("/api/admin/finance")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.overview) setFinance(d.overview);
+      })
+      .catch(() => {});
+  }, []);
 
   const statusColors: Record<string, string> = {
     PAID: "bg-deep-olive/20 text-deep-olive",
@@ -74,6 +89,36 @@ export default function AdminPage() {
           </span>
         )}
       </div>
+
+      {/* Finance Cards */}
+      {finance && (
+        <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className="border border-charcoal/10 bg-cream/30 px-4 py-3">
+            <p className="text-[9px] font-display font-bold uppercase tracking-[0.15em] text-text-gray">
+              Wallet Balance
+            </p>
+            <p className="mt-1 font-display text-lg font-black text-charcoal tabular-nums">
+              {formatPrice(finance.estimatedBalanceCents)}
+            </p>
+          </div>
+          <div className="border border-charcoal/10 bg-cream/30 px-4 py-3">
+            <p className="text-[9px] font-display font-bold uppercase tracking-[0.15em] text-text-gray">
+              Total Revenue
+            </p>
+            <p className="mt-1 font-display text-lg font-black text-charcoal tabular-nums">
+              {formatPrice(finance.totalRevenueCents)}
+            </p>
+          </div>
+          <div className="border border-charcoal/10 bg-cream/30 px-4 py-3">
+            <p className="text-[9px] font-display font-bold uppercase tracking-[0.15em] text-text-gray">
+              Pending Payouts
+            </p>
+            <p className="mt-1 font-display text-lg font-black text-charcoal tabular-nums">
+              {formatPrice(finance.pendingPayoutsCents)}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="flex flex-wrap gap-2 mb-6">
