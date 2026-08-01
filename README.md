@@ -1,36 +1,68 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# NapFleet — Vehicle-Shaped Dog Beds
 
-## Getting Started
+**Big adventures. Better naps.**
 
-First, run the development server:
+A headless ecommerce storefront built with Next.js 14 (App Router), TypeScript, and Tailwind CSS. Vehicle-shaped dog beds for four-legged dreamers.
+
+## Quick Start
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Architecture
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- **Framework**: Next.js 14 with App Router (React Server Components by default)
+- **Language**: TypeScript in strict mode
+- **Styling**: Tailwind CSS with CSS custom properties for design tokens
+- **Fonts**: Barlow Condensed (display) + Inter (body) via next/font
+- **Validation**: Zod for environment and content validation
+- **Commerce**: Provider abstraction layer (mock for dev, Shopify Storefront API for production)
 
-## Learn More
+### Commerce Provider
 
-To learn more about Next.js, take a look at the following resources:
+The app uses a typed `CommerceProvider` interface in `src/lib/commerce/types.ts`.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- **Development**: `src/lib/commerce/mock.ts`
+- **Production**: Implement the interface with Shopify Storefront API
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### Content Layer
 
-## Deploy on Vercel
+All approved copy lives in `src/content/napfleet.ts`. Commerce facts come from the provider.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Commands
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Start development server |
+| `npm run build` | Production build |
+| `npm start` | Start production server |
+| `npm run lint` | Run ESLint |
+| `npm run verify` | Run full verification suite |
+
+## Design Tokens
+
+| Token | Hex |
+|-------|-----|
+| Fleet Charcoal | `#181B17` |
+| Deep Olive | `#535C45` |
+| Field Olive | `#6B7358` |
+| Flight Cream | `#F4F0E6` |
+| Warm White | `#FFFDF7` |
+| Field Khaki | `#B8AE91` |
+| Signal Orange | `#D95F36` |
+| Muted Sky Blue | `#8FB8CE` |
+| Text Gray | `#6D7069` |
+
+## Documentation
+
+- [Commerce Setup](docs/COMMERCE_SETUP.md)
+- [Content Readiness](docs/CONTENT_READINESS.md)
+- [Deployment Checklist](docs/DEPLOYMENT_CHECKLIST.md)
+
+## License
+
+Private — All Rights Reserved

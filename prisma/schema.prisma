@@ -1,0 +1,259 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Store ────────────────────────────────────────────────
+model Store {
+  id        String   @id @default(cuid())
+  slug      String   @unique
+  name      String
+  legalName String
+  currency  String   @default("USD")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orders Order[]
+}
+
+// ─── Order ────────────────────────────────────────────────
+model Order {
+  id                       String   @id @default(cuid())
+  storeId                  String
+  publicOrderNumber        String   @unique
+  customerEmail            String
+  customerFirstName        String   @default("")
+  customerLastName         String   @default("")
+  customerPhone            String?
+  shippingAddressSnapshot  String   // JSON
+  billingAddressSnapshot   String?  // JSON
+  subtotalCents            Int
+  discountCents            Int      @default(0)
+  shippingCents            Int      @default(0)
+  taxCents                 Int      @default(0)
+  totalCents               Int
+  currency                 String   @default("USD")
+  paymentStatus            String   @default("PENDING_PAYMENT")
+  fulfillmentStatus        String   @default("PREORDER")
+  disputeStatus            String?
+  appliedDiscountCode      String?
+  termsVersion             String   @default("1.0")
+  refundPolicyVersion      String   @default("1.0")
+  preorderDisclosureVersion String  @default("1.0")
+  paidAt                   DateTime?
+  canceledAt               DateTime?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  store          Store            @relation(fields: [storeId], references: [id])
+  items          OrderItem[]
+  checkoutAttempts CheckoutAttempt[]
+  payments       Payment[]
+  refunds        Refund[]
+  disputes       Dispute[]
+  fulfillments   Fulfillment[]
+  auditEvents    AuditEvent[]
+
+  @@index([storeId])
+  @@index([paymentStatus])
+  @@index([publicOrderNumber])
+}
+
+// ─── OrderItem ────────────────────────────────────────────
+model OrderItem {
+  id                     String @id @default(cuid())
+  orderId                String
+  productId              String
+  variantId              String
+  skuSnapshot            String
+  productTitleSnapshot   String
+  variantTitleSnapshot   String
+  sizeSnapshot           String
+  imageSnapshot          String
+  preorderEstimateSnapshot String
+  unitPriceCents         Int
+  quantity               Int
+  lineTotalCents         Int
+  createdAt              DateTime @default(now())
+
+  order Order @relation(fields: [orderId], references: [id])
+
+  @@index([orderId])
+}
+
+// ─── CheckoutAttempt ──────────────────────────────────────
+model CheckoutAttempt {
+  id              String   @id @default(cuid())
+  orderId         String
+  provider        String   @default("coinflow")
+  providerPaymentId String?
+  payerId         String
+  amountCents     Int
+  currency        String   @default("USD")
+  status          String   @default("CREATED")
+  attemptNumber   Int      @default(1)
+  idempotencyKey  String   @unique
+  failureCode     String?
+  failureMessage  String?
+  expiresAt       DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  order    Order     @relation(fields: [orderId], references: [id])
+  payments Payment[]
+
+  @@index([orderId])
+  @@index([status])
+}
+
+// ─── Payment ──────────────────────────────────────────────
+model Payment {
+  id                          String   @id @default(cuid())
+  orderId                     String
+  checkoutAttemptId           String
+  provider                    String   @default("coinflow")
+  providerPaymentId           String   @unique
+  fiatAmountCents             Int
+  fiatCurrency                String   @default("USD")
+  settlementAsset             String?
+  settlementNetwork           String?
+  settlementAddressMasked     String?
+  settlementTransactionSignature String?
+  usdcGrossAmount             String?
+  usdcNetAmount               String?
+  providerFeeAmount           String?
+  networkFeeAmount            String?
+  fraudProtectionStatus       String   @default("NOT_REVIEWED")
+  fraudProtectionReason       String?
+  chargebackIndemnified       Boolean?
+  threeDSStatus               String?
+  avsStatus                   String?
+  status                      String   @default("CREATED")
+  authorizedAt                DateTime?
+  disbursedAt                 DateTime?
+  settledAt                   DateTime?
+  failedAt                    DateTime?
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+
+  order            Order            @relation(fields: [orderId], references: [id])
+  checkoutAttempt  CheckoutAttempt  @relation(fields: [checkoutAttemptId], references: [id])
+  refunds          Refund[]
+  disputes         Dispute[]
+
+  @@index([orderId])
+  @@index([providerPaymentId])
+  @@index([status])
+}
+
+// ─── ProviderEvent ────────────────────────────────────────
+model ProviderEvent {
+  id               String   @id @default(cuid())
+  provider         String   @default("coinflow")
+  providerEventId  String   @unique
+  providerPaymentId String?
+  eventType        String
+  payloadHash      String
+  processingStatus String   @default("PENDING")
+  attemptCount     Int      @default(1)
+  lastError        String?
+  receivedAt       DateTime @default(now())
+  processedAt      DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([providerEventId])
+  @@index([processingStatus])
+}
+
+// ─── Refund ───────────────────────────────────────────────
+model Refund {
+  id                  String   @id @default(cuid())
+  orderId             String
+  paymentId           String
+  providerRefundId    String?  @unique
+  amountCents         Int
+  currency            String   @default("USD")
+  reason              String
+  status              String   @default("PENDING")
+  providerFeeCents    Int?
+  merchantLiabilityCents Int?
+  initiatedByAdminId  String   @default("system")
+  createdAt           DateTime @default(now())
+  completedAt         DateTime?
+  failedAt            DateTime?
+  failureReason       String?
+
+  order   Order   @relation(fields: [orderId], references: [id])
+  payment Payment @relation(fields: [paymentId], references: [id])
+
+  @@index([orderId])
+  @@index([paymentId])
+}
+
+// ─── Dispute ──────────────────────────────────────────────
+model Dispute {
+  id               String   @id @default(cuid())
+  orderId          String
+  paymentId        String
+  providerDisputeId String  @unique
+  amountCents      Int
+  currency         String   @default("USD")
+  reasonCode       String
+  category         String
+  status           String   @default("OPEN")
+  fraudProtected   Boolean  @default(false)
+  indemnified      Boolean  @default(false)
+  evidenceDueAt    DateTime?
+  openedAt         DateTime @default(now())
+  closedAt         DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  order   Order   @relation(fields: [orderId], references: [id])
+  payment Payment @relation(fields: [paymentId], references: [id])
+
+  @@index([orderId])
+  @@index([status])
+}
+
+// ─── Fulfillment ──────────────────────────────────────────
+model Fulfillment {
+  id             String   @id @default(cuid())
+  orderId        String
+  carrier        String?
+  trackingNumber String?
+  trackingUrl    String?
+  status         String   @default("UNFULFILLED")
+  shippedAt      DateTime?
+  deliveredAt    DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  order Order @relation(fields: [orderId], references: [id])
+
+  @@index([orderId])
+}
+
+// ─── AuditEvent ───────────────────────────────────────────
+model AuditEvent {
+  id           String   @id @default(cuid())
+  actorType    String
+  actorId      String?
+  action       String
+  entityType   String
+  entityId     String
+  safeMetadata String?  // JSON
+  createdAt    DateTime @default(now())
+
+  orderId String?
+  order   Order?  @relation(fields: [orderId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([orderId])
+  @@index([createdAt])
+}
