@@ -3,7 +3,18 @@
  * API keys never reach the browser. All mutations are server-authoritative.
  */
 import { Currency } from "@coinflowlabs/react";
+import { validateEnv } from "../env";
 import type { CoinflowEnv, CoinflowSessionResult, CheckoutJwtPayload } from "./types";
+
+// Runtime environment validation — called at module load so that a
+// prohibited secret in the environment crashes on import (fail closed).
+// Skipped in tests so unit tests can control their own environment.
+if (process.env.NODE_ENV !== "test") {
+  const env = validateEnv();
+  if (!env.valid) {
+    console.warn(`[env] Runtime environment issues: ${env.issues.join("; ")}`);
+  }
+}
 
 const API_BASE: Record<CoinflowEnv, string> = {
   sandbox: "https://api-sandbox.coinflow.cash",

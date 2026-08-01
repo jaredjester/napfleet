@@ -1,36 +1,62 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars */
 import { NextRequest, NextResponse } from "next/server";
 import { Currency } from "@coinflowlabs/react";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { validateEnv } from "@/lib/env";
+import { canEnableCheckout } from "@/lib/validation/policies";
+import { canPublish } from "@/lib/validation/catalog";
+import { products } from "@/content/products";
 import { createSessionKey, createCheckoutJwt } from "@/lib/coinflow/server";
 import { createOrder, calculatePricing } from "@/lib/orders";
+import { rateLimit, getRateLimitKey, Limiters } from "@/lib/rate-limit";
 import type { PrepareCheckoutInput, PrepareCheckoutResponse } from "@/lib/coinflow/types";
 
 const MAX_BODY_SIZE = 64 * 1024; // 64KB
+const ATTEMPT_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+// Fail closed at module load: a prohibited secret in the environment must
+// crash this module immediately (see validateEnv).
+const envAtLoad = validateEnv();
+if (!envAtLoad.valid) {
+  console.warn(`[checkout/prepare] Environment issues at module load: ${envAtLoad.issues.join("; ")}`);
+}
+
+type OrderWithItems = Awaited<ReturnType<typeof createOrder>>;
+type AttemptWithOrder = Prisma.CheckoutAttemptGetPayload<{
+  include: { order: { include: { items: true } } };
+}>;
 
 /**
  * POST /api/checkout/prepare
  *
- * Server-authoritative checkout preparation.
+ * Server-authoritative checkout preparation. Fails closed — never test mode.
  * 1. Validates request schema
- * 2. Validates cart server-side (prices never from client)
- * 3. Creates pending order with immutable snapshots
- * 4. Creates checkout attempt
- * 5. Generates Coinflow session key and checkout JWT
- * 6. Returns only safe checkout configuration
+ * 2. Gates: environment (prod), policy readiness, catalog publish-readiness
+ * 3. Idempotent replay when a clientIdempotencyKey matches an existing attempt
+ * 4. Creates pending order with immutable snapshots
+ * 5. Creates checkout attempt
+ * 6. Generates Coinflow session key and checkout JWT
+ * 7. Returns only safe checkout configuration
  */
 export async function POST(request: NextRequest) {
-  // Rate limiting placeholder — integrate with Upstash or similar in production
   const correlationId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+  // Rate limit
+  const rlKey = getRateLimitKey(request);
+  const { allowed } = await rateLimit(rlKey, Limiters.checkout.maxRequests, Limiters.checkout.windowMs);
+  if (!allowed) {
+    return NextResponse.json(
+      { error: "Too many checkout attempts. Please wait a moment.", correlationId },
+      { status: 429 }
+    );
+  }
 
   try {
     // Validate body size
     const contentLength = parseInt(request.headers.get("content-length") || "0", 10);
     if (contentLength > MAX_BODY_SIZE) {
-      return NextResponse.json(
-        { error: "Request too large", correlationId },
-        { status: 413 }
-      );
+      return NextResponse.json({ error: "Request too large", correlationId }, { status: 413 });
     }
 
     const body = (await request.json()) as PrepareCheckoutInput;
@@ -44,25 +70,70 @@ export async function POST(request: NextRequest) {
     }
 
     if (body.items.length > 20) {
+      return NextResponse.json({ error: "Too many items", correlationId }, { status: 400 });
+    }
+
+    // ── Gates — run BEFORE creating an order ──────────────────────────────
+
+    // 1. Environment gate: in production, checkout requires a fully valid
+    //    configuration. Invalid → 503, never test mode.
+    if ((process.env.COINFLOW_ENV || "sandbox") === "prod") {
+      const env = validateEnv();
+      if (!env.valid) {
+        console.error(`[${correlationId}] Checkout blocked — invalid environment: ${env.issues.join("; ")}`);
+        return NextResponse.json(
+          { error: "Checkout temporarily unavailable", correlationId },
+          { status: 503 }
+        );
+      }
+    }
+
+    // 2. Policy gate: checkout may only be enabled once all policies are ready.
+    const policyCheck = canEnableCheckout();
+    if (!policyCheck.allowed) {
       return NextResponse.json(
-        { error: "Too many items", correlationId },
-        { status: 400 }
+        { error: "Checkout not available", reasons: policyCheck.reasons, correlationId },
+        { status: 503 }
       );
     }
 
+    // 3. Catalog gate: every item must be publish-ready.
+    for (const item of body.items) {
+      const product = products.find((p) => p.handle === item.productId);
+      if (!product || !canPublish(product)) {
+        return NextResponse.json(
+          { error: "Product not available", correlationId },
+          { status: 400 }
+        );
+      }
+    }
+
+    // ── Idempotent replay ─────────────────────────────────────────────────
+    // If the client retries with the same key, return the existing checkout
+    // attempt and its order instead of creating a duplicate.
+    const clientIdempotencyKey = body.clientIdempotencyKey?.trim();
+    if (clientIdempotencyKey) {
+      const existing = await prisma.checkoutAttempt.findUnique({
+        where: { idempotencyKey: clientIdempotencyKey },
+        include: { order: { include: { items: true } } },
+      });
+      if (existing) {
+        return await replayCheckout(existing, correlationId);
+      }
+    }
+
     // Server-authoritative pricing (never trusts client prices)
-    const pricing = calculatePricing(body.items, undefined, body.discountCode);
+    const pricing = await calculatePricing(
+      body.items,
+      body.shippingAddress as { country: string; state: string; postalCode: string },
+      body.discountCode
+    );
 
     // Get or create the NapFleet store
     let store = await prisma.store.findUnique({ where: { slug: "napfleet" } });
     if (!store) {
       store = await prisma.store.create({
-        data: {
-          slug: "napfleet",
-          name: "NapFleet",
-          legalName: "NapFleet Pet Co.",
-          currency: "USD",
-        },
+        data: { slug: "napfleet", name: "NapFleet", legalName: "NapFleet Pet Co.", currency: "USD" },
       });
     }
 
@@ -78,26 +149,43 @@ export async function POST(request: NextRequest) {
     // Generate a stable payer ID (customer email hashed)
     const payerId = `napfleet_payer_${Buffer.from(body.customer.email.toLowerCase().trim()).toString("base64url").slice(0, 32)}`;
 
-    // Create checkout attempt
-    const idempotencyKey = `attempt_${order.id}_${Date.now()}`;
-    const checkoutAttempt = await prisma.checkoutAttempt.create({
-      data: {
-        orderId: order.id,
-        provider: "coinflow",
-        payerId,
-        amountCents: pricing.totalCents,
-        currency: "USD",
-        status: "CREATED",
-        attemptNumber: 1,
-        idempotencyKey,
-        expiresAt: new Date(Date.now() + 30 * 60 * 1000), // 30 min
-      },
-    });
+    // Create checkout attempt. The unique idempotencyKey guards against
+    // concurrent duplicate submissions racing past the lookup above.
+    const idempotencyKey = clientIdempotencyKey || `attempt_${order.id}_${Date.now()}`;
+    let checkoutAttempt: Awaited<ReturnType<typeof prisma.checkoutAttempt.create>>;
+    try {
+      checkoutAttempt = await prisma.checkoutAttempt.create({
+        data: {
+          orderId: order.id,
+          provider: "coinflow",
+          payerId,
+          amountCents: pricing.totalCents,
+          currency: "USD",
+          status: "CREATED",
+          attemptNumber: 1,
+          idempotencyKey,
+          expiresAt: new Date(Date.now() + ATTEMPT_TTL_MS),
+        },
+      });
+    } catch (err) {
+      // Unique constraint on idempotencyKey — a concurrent duplicate request
+      // with the same client key raced us. Replay the existing attempt.
+      if ((err as { code?: string }).code === "P2002" && clientIdempotencyKey) {
+        const existing = await prisma.checkoutAttempt.findUnique({
+          where: { idempotencyKey: clientIdempotencyKey },
+          include: { order: { include: { items: true } } },
+        });
+        if (existing) {
+          return await replayCheckout(existing, correlationId);
+        }
+      }
+      throw err;
+    }
 
-    // Generate Coinflow session key and checkout JWT
+    // Generate Coinflow session key and checkout JWT. If Coinflow is
+    // unavailable the checkout fails closed with 503 — never test mode.
     let sessionKey: string;
     let jwtToken: string | undefined;
-
     try {
       const sessionResult = await createSessionKey(payerId);
       sessionKey = sessionResult.sessionKey;
@@ -127,51 +215,25 @@ export async function POST(request: NextRequest) {
           quantity: li.quantity,
           unitPrice: { valueInCurrency: li.unitPriceCents / 100, currency: "USD" },
         })),
-        settlementType: "USDC" as any,
+        settlementType: "USDC",
         sessionKey,
       });
       jwtToken = jwtResult;
     } catch (err) {
-      // Log the error but still return a partial response — Coinflow SDK on client
-      // may handle session key + JWT generation through its own channels
-      console.error("Coinflow session/JWT error:", err);
-      sessionKey = "";
+      console.error(`[${correlationId}] Coinflow session/JWT error:`, err);
+      return NextResponse.json(
+        { error: "Checkout temporarily unavailable", correlationId },
+        { status: 503 }
+      );
     }
 
     // Update checkout attempt with expiration
     await prisma.checkoutAttempt.update({
       where: { id: checkoutAttempt.id },
-      data: { status: "READY", expiresAt: new Date(Date.now() + 30 * 60 * 1000) },
+      data: { status: "READY", expiresAt: new Date(Date.now() + ATTEMPT_TTL_MS) },
     });
 
-    const merchantId = process.env.NEXT_PUBLIC_COINFLOW_MERCHANT_ID || "";
-    const environment = (process.env.NEXT_PUBLIC_COINFLOW_ENV || "sandbox") as "sandbox" | "prod";
-
-    const response: PrepareCheckoutResponse = {
-      orderNumber: order.publicOrderNumber,
-      checkoutAttemptId: checkoutAttempt.id,
-      merchantId,
-      environment,
-      sessionKey,
-      jwtToken,
-      subtotal: { cents: pricing.totalCents, currency: Currency.USD },
-      displayOrder: {
-        items: pricing.lineItems.map((li) => ({
-          title: li.title,
-          variant: li.variantTitle,
-          quantity: li.quantity,
-          unitPriceCents: li.unitPriceCents,
-          image: li.image,
-        })),
-        subtotalCents: pricing.subtotalCents,
-        discountCents: pricing.discountCents,
-        shippingCents: pricing.shippingCents,
-        taxCents: pricing.taxCents,
-        totalCents: pricing.totalCents,
-      },
-    };
-
-    return NextResponse.json(response);
+    return NextResponse.json(buildCheckoutResponse(order, checkoutAttempt, sessionKey, jwtToken));
   } catch (err) {
     console.error(`[${correlationId}] Checkout prepare error:`, err);
     const message = err instanceof Error ? err.message : "Checkout preparation failed";
@@ -179,9 +241,107 @@ export async function POST(request: NextRequest) {
     const safeMessage = message.includes("not found") || message.includes("unavailable")
       ? message
       : "Unable to prepare checkout. Please try again.";
+    return NextResponse.json({ error: safeMessage, correlationId }, { status: 500 });
+  }
+}
+
+/**
+ * Replay an existing checkout attempt for a repeated clientIdempotencyKey.
+ * Refreshes the attempt expiry and regenerates the Coinflow session key and
+ * JWT so the returned checkout remains usable. Fails closed with 503 if
+ * Coinflow is unavailable.
+ */
+async function replayCheckout(
+  attempt: AttemptWithOrder,
+  correlationId: string
+): Promise<NextResponse> {
+  const order = attempt.order;
+  const address = parseAddressSnapshot(order.shippingAddressSnapshot);
+
+  try {
+    const sessionResult = await createSessionKey(attempt.payerId);
+    const sessionKey = sessionResult.sessionKey;
+
+    const jwtToken = await createCheckoutJwt({
+      subtotal: { cents: order.totalCents, currency: Currency.USD },
+      customerInfo: {
+        email: order.customerEmail,
+        firstName: order.customerFirstName || undefined,
+        lastName: order.customerLastName || undefined,
+        address: address.line1,
+        city: address.city,
+        state: address.state,
+        zip: address.postalCode,
+        country: address.country,
+      },
+      webhookInfo: {
+        orderNumber: order.publicOrderNumber,
+        orderId: order.id,
+        checkoutAttemptId: attempt.id,
+        correlationId,
+      },
+      chargebackProtectionData: order.items.map((item) => ({
+        itemClass: "physical",
+        name: item.productTitleSnapshot,
+        sku: item.skuSnapshot,
+        quantity: item.quantity,
+        unitPrice: { valueInCurrency: item.unitPriceCents / 100, currency: "USD" },
+      })),
+      settlementType: "USDC",
+      sessionKey,
+    });
+
+    // Refresh the attempt so the returned checkout remains usable.
+    await prisma.checkoutAttempt.update({
+      where: { id: attempt.id },
+      data: { status: "READY", expiresAt: new Date(Date.now() + ATTEMPT_TTL_MS) },
+    });
+
+    return NextResponse.json(buildCheckoutResponse(order, attempt, sessionKey, jwtToken));
+  } catch (err) {
+    console.error(`[${correlationId}] Checkout replay failed (Coinflow unavailable):`, err);
     return NextResponse.json(
-      { error: safeMessage, correlationId },
-      { status: 500 }
+      { error: "Checkout temporarily unavailable", correlationId },
+      { status: 503 }
     );
+  }
+}
+
+function buildCheckoutResponse(
+  order: OrderWithItems,
+  attempt: { id: string },
+  sessionKey: string,
+  jwtToken?: string
+): PrepareCheckoutResponse {
+  return {
+    orderNumber: order.publicOrderNumber,
+    checkoutAttemptId: attempt.id,
+    merchantId: process.env.NEXT_PUBLIC_COINFLOW_MERCHANT_ID || "",
+    environment: (process.env.NEXT_PUBLIC_COINFLOW_ENV || "sandbox") as "sandbox" | "prod",
+    sessionKey,
+    jwtToken,
+    subtotal: { cents: order.totalCents, currency: Currency.USD },
+    displayOrder: {
+      items: order.items.map((item) => ({
+        title: item.productTitleSnapshot,
+        variant: item.variantTitleSnapshot,
+        quantity: item.quantity,
+        unitPriceCents: item.unitPriceCents,
+        image: item.imageSnapshot || undefined,
+      })),
+      subtotalCents: order.subtotalCents,
+      discountCents: order.discountCents,
+      shippingCents: order.shippingCents,
+      taxCents: order.taxCents,
+      totalCents: order.totalCents,
+    },
+  };
+}
+
+function parseAddressSnapshot(snapshot: string): Record<string, string> {
+  try {
+    return JSON.parse(snapshot) as Record<string, string>;
+  } catch {
+    return {};
   }
 }

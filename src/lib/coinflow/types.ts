@@ -50,6 +50,12 @@ export interface PrepareCheckoutInput {
     country: string;
   };
   discountCode?: string;
+  /**
+   * Client-generated idempotency key (e.g. a UUID). When provided, a
+   * repeated prepare request with the same key returns the existing
+   * checkout attempt instead of creating a duplicate order.
+   */
+  clientIdempotencyKey?: string;
 }
 
 export interface PrepareCheckoutResponse {

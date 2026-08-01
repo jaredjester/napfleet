@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { verifyWebhookSignature } from "@/lib/coinflow/server";
+import { emailProvider } from "@/lib/email";
 import crypto from "crypto";
 
 /**
@@ -128,50 +129,87 @@ async function processWebhookEvent(
       const payment = await prisma.payment.findUnique({ where: { providerPaymentId: paymentId } });
       if (!payment) break;
 
-      // Critical: validate settlement data
-      const settlementAmount = (payload.netAmountCents || payload.amountCents) as number;
       const settlementAsset = (payload.settlementAsset || "USDC") as string;
       const expectedAsset = process.env.COINFLOW_EXPECTED_SETTLEMENT_ASSET || "USDC";
+      const expectedAddress = (process.env.COINFLOW_EXPECTED_SETTLEMENT_ADDRESS || "").toLowerCase();
+      const receivedAddress = payload.settlementAddress ? String(payload.settlementAddress) : undefined;
 
-      if (settlementAsset !== expectedAsset) {
-        await prisma.order.update({
-          where: { id: payment.orderId },
-          data: { paymentStatus: "PAYMENT_REVIEW_REQUIRED" },
-        });
-        await updatePaymentStatus(paymentId, {
-          status: "SETTLED",
-          settledAt: new Date(),
-          settlementAsset,
-          settlementAddressMasked: payload.settlementAddress as string,
-          settlementTransactionSignature: payload.txSignature as string,
-          usdcGrossAmount: String(payload.usdcGrossAmount || ""),
-          usdcNetAmount: String(payload.usdcNetAmount || ""),
-        });
-        break;
-      }
+      // Settlement amount: prefer the gross amount charged, fall back to the
+      // net amount.
+      const settlementAmountCents =
+        typeof payload.amountCents === "number"
+          ? payload.amountCents
+          : typeof payload.netAmountCents === "number"
+            ? payload.netAmountCents
+            : undefined;
 
-      // Mark payment settled
+      // 1. Mark the payment settled — the webhook is authoritative for
+      //    settlement state.
       await updatePaymentStatus(paymentId, {
         status: "SETTLED",
         settledAt: new Date(),
         settlementAsset,
-        settlementAddressMasked: payload.settlementAddress
-          ? String(payload.settlementAddress).slice(0, 4) + "..." + String(payload.settlementAddress).slice(-4)
+        settlementAddressMasked: receivedAddress
+          ? receivedAddress.slice(0, 4) + "..." + receivedAddress.slice(-4)
           : undefined,
-        settlementTransactionSignature: payload.txSignature as string,
-        usdcGrossAmount: payload.usdcGrossAmount
-          ? String(payload.usdcGrossAmount)
-          : undefined,
-        usdcNetAmount: payload.usdcNetAmount
-          ? String(payload.usdcNetAmount)
-          : undefined,
-        providerFeeAmount: payload.feeAmount
-          ? String(payload.feeAmount)
-          : undefined,
+        settlementTransactionSignature: payload.txSignature ? String(payload.txSignature) : undefined,
+        usdcGrossAmount: payload.usdcGrossAmount ? String(payload.usdcGrossAmount) : undefined,
+        usdcNetAmount: payload.usdcNetAmount ? String(payload.usdcNetAmount) : undefined,
+        providerFeeAmount: payload.feeAmount ? String(payload.feeAmount) : undefined,
       });
 
-      // CRITICAL: Only transition to PAID on verified settlement
-      // with fraud check
+      // 2. Settlement verification — fail closed. Any mismatch sends the
+      //    order to PAYMENT_REVIEW_REQUIRED instead of PAID.
+      const mismatchReasons: string[] = [];
+
+      if (settlementAmountCents === undefined) {
+        mismatchReasons.push("Settlement amount missing from webhook payload");
+      } else if (settlementAmountCents < payment.fiatAmountCents) {
+        mismatchReasons.push(
+          `Settlement amount ${settlementAmountCents} cents is less than expected ${payment.fiatAmountCents} cents`
+        );
+      }
+
+      if (settlementAsset !== expectedAsset) {
+        mismatchReasons.push(`Settlement asset "${settlementAsset}" does not match expected "${expectedAsset}"`);
+      }
+
+      if (expectedAddress) {
+        if (!receivedAddress) {
+          mismatchReasons.push("Settlement address missing from webhook payload");
+        } else if (receivedAddress.toLowerCase() !== expectedAddress) {
+          mismatchReasons.push(`Settlement address "${receivedAddress}" does not match expected address`);
+        }
+      }
+
+      if (mismatchReasons.length > 0) {
+        const reasonText = mismatchReasons.join("; ");
+        await updatePaymentStatus(paymentId, { settlementMismatchReason: reasonText });
+        await prisma.order.update({
+          where: { id: payment.orderId },
+          data: { paymentStatus: "PAYMENT_REVIEW_REQUIRED" },
+        });
+        await prisma.auditEvent.create({
+          data: {
+            actorType: "system",
+            action: "ORDER_REVIEW_REQUIRED_SETTLEMENT_MISMATCH",
+            entityType: "Order",
+            entityId: payment.orderId,
+            safeMetadata: JSON.stringify({
+              provider: "coinflow",
+              providerPaymentId: paymentId,
+              reasons: mismatchReasons,
+              event: "payment.settled",
+            }),
+            orderId: payment.orderId,
+          },
+        });
+        console.error(`Coinflow webhook: settlement mismatch for payment ${paymentId}: ${reasonText}`);
+        break;
+      }
+
+      // 3. Settlement verified — only now may the order become PAID,
+      //    with the fraud check.
       const fraudOk = payment.fraudProtectionStatus !== "REJECTED";
 
       if (fraudOk) {
@@ -210,6 +248,16 @@ async function processWebhookEvent(
             orderId: payment.orderId,
           },
         });
+
+        // Send order confirmation email (best-effort — never fail the webhook)
+        try {
+          await sendOrderConfirmationEmail(payment.orderId);
+        } catch (err) {
+          console.error(
+            `Coinflow webhook: order confirmation email failed for order ${payment.orderId}:`,
+            err
+          );
+        }
       } else {
         // Fraud rejected — do NOT fulfill
         await prisma.order.update({
@@ -330,4 +378,59 @@ async function handleDisputeClose(
       closedAt: new Date(),
     },
   });
+}
+
+/**
+ * Send the order confirmation email from the immutable order snapshot.
+ * Called after an order transitions to PAID. Never throws — the
+ * provider returns { success: false, error } instead.
+ */
+async function sendOrderConfirmationEmail(orderId: string) {
+  const order = await prisma.order.findUnique({
+    where: { id: orderId },
+    include: { items: true },
+  });
+  if (!order) {
+    console.error(`Coinflow webhook: order ${orderId} not found for confirmation email`);
+    return;
+  }
+
+  const result = await emailProvider.sendOrderConfirmation({
+    to: order.customerEmail,
+    orderNumber: order.publicOrderNumber,
+    items: order.items.map((item) => ({
+      title: item.productTitleSnapshot,
+      variant: item.variantTitleSnapshot,
+      quantity: item.quantity,
+      price: item.unitPriceCents,
+    })),
+    totalCents: order.totalCents,
+    shippingAddress: formatShippingAddress(order.shippingAddressSnapshot),
+    preorderEstimate: order.items[0]?.preorderEstimateSnapshot || "Approximately 8 weeks",
+  });
+
+  if (!result.success) {
+    console.error(
+      `Coinflow webhook: confirmation email failed for order ${order.publicOrderNumber}:`,
+      result.error
+    );
+  }
+}
+
+/**
+ * Flatten the stored shipping address JSON snapshot into a single
+ * human-readable string for email delivery.
+ */
+function formatShippingAddress(snapshot: string): string {
+  try {
+    const address = JSON.parse(snapshot) as Record<string, string>;
+    const cityLine = [address.city, address.state, address.postalCode]
+      .filter(Boolean)
+      .join(" ");
+    return [address.name, address.company, address.line1, address.line2, cityLine, address.country]
+      .filter(Boolean)
+      .join(", ");
+  } catch {
+    return snapshot;
+  }
 }

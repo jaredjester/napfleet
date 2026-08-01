@@ -13,12 +13,23 @@ import { getPaymentStatus } from "@/lib/coinflow/server";
  * - Pending refunds
  * - Open disputes
  */
-export async function POST(request: NextRequest) {
-  // Protect the endpoint
-  const authHeader = request.headers.get("authorization") || "";
-  const cronSecret = process.env.CRON_SECRET || "dev-secret";
 
-  if (authHeader !== `Bearer ${cronSecret}`) {
+// CRON_SECRET is required at module load. There is no implicit default:
+// in production an unset secret refuses to start, and in development the
+// endpoint only accepts requests when CRON_SECRET is explicitly set.
+const cronSecret = process.env.CRON_SECRET;
+
+// Only enforce at runtime (not during next build's static analysis)
+const isBuildTime = process.env.NEXT_PHASE === "phase-production-build";
+if (!cronSecret && process.env.NODE_ENV === "production" && !isBuildTime) {
+  throw new Error("CRON_SECRET must be set in production");
+}
+
+export async function POST(request: NextRequest) {
+  // Protect the endpoint — fail closed when the secret is unset
+  const authHeader = request.headers.get("authorization") || "";
+
+  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

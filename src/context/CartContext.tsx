@@ -94,6 +94,33 @@ export function CartProvider({ children }: { children: ReactNode }) {
     }
   }, [cartId, items]);
 
+  // Cross-tab sync: listen for cart changes from other tabs.
+  useEffect(() => {
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key !== STORAGE_KEY || !event.newValue) return;
+      try {
+        const parsed = JSON.parse(event.newValue) as {
+          cartId?: string;
+          items?: CommerceCartLine[];
+        };
+        if (parsed.items) {
+          // Validate quantities and filter stale items
+          const validated = parsed.items
+            .filter((l) => l.quantity > 0)
+            .map((l) => ({ ...l, quantity: Math.min(99, Math.max(1, l.quantity)) }));
+          setItems(validated);
+          setSubtotal(validated.reduce((sum, l) => sum + l.price * l.quantity, 0));
+        }
+        if (parsed.cartId) setCartId(parsed.cartId);
+      } catch {
+        // Corrupt storage from another tab — ignore
+      }
+    };
+
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, []);
+
   const addItem = useCallback(
     async (productHandle: string, variantId: string, quantity = 1) => {
       if (!cartId) return;

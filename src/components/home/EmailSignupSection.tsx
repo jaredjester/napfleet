@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import { HOME } from "@/content/napfleet";
-import { mockNewsletter } from "@/lib/commerce/mock";
 import { Button } from "@/components/ui/Button";
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function EmailSignupSection() {
   const [email, setEmail] = useState("");
@@ -13,21 +14,46 @@ export function EmailSignupSection() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email || !consent) return;
+    setErrorMsg("");
+
+    // Client-side first pass — the server validates authoritatively.
+    if (!email.trim()) {
+      setErrorMsg("Please enter your email address.");
+      setStatus("error");
+      return;
+    }
+    if (!EMAIL_REGEX.test(email.trim())) {
+      setErrorMsg("Please enter a valid email address.");
+      setStatus("error");
+      return;
+    }
+    if (!consent) {
+      setErrorMsg("Please confirm you agree to receive email updates.");
+      setStatus("error");
+      return;
+    }
+
     setStatus("loading");
     try {
-      const result = await mockNewsletter.subscribe(email);
-      if (result.success) {
+      const response = await fetch("/api/newsletter", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim(), consent }),
+      });
+
+      if (response.ok) {
         setStatus("success");
         setEmail("");
         setConsent(false);
-      } else {
-        setStatus("error");
-        setErrorMsg(result.error || "Something went wrong");
+        return;
       }
+
+      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+      setStatus("error");
+      setErrorMsg(payload?.error || "Something went wrong. Please try again.");
     } catch {
       setStatus("error");
-      setErrorMsg("Newsletter provider not configured");
+      setErrorMsg("Something went wrong. Please try again.");
     }
   };
 

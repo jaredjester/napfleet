@@ -1,7 +1,18 @@
 import { prisma } from "./db";
 import { products } from "@/content/products";
+import type { TaxProvider } from "./tax/types";
+import type { ShippingProvider } from "./shipping/types";
+import { mockTaxProvider } from "./tax/mock";
+import { mockShippingProvider } from "./shipping/mock";
 
 const ORDER_PREFIX = "NF";
+
+/**
+ * Provider selection — mock by default. Swap these for real providers
+ * (e.g. Stripe Tax, EasyPost) once configured, keyed off env vars.
+ */
+const taxProvider: TaxProvider = mockTaxProvider;
+const shippingProvider: ShippingProvider = mockShippingProvider;
 
 /**
  * Generate a human-readable public order number.
@@ -20,16 +31,16 @@ export function generateOrderNumber(): string {
 /**
  * Server-authoritative pricing calculation.
  * Never trusts client-submitted prices.
+ *
+ * Tax and shipping rates come from the configured providers
+ * (flat 8% tax and flat $9.99 shipping mocks by default).
  */
-export function calculatePricing(
+export async function calculatePricing(
   items: Array<{ productId: string; variantId: string; quantity: number }>,
-  _shippingAddress?: { country: string; state: string; postalCode: string },
+  shippingAddress?: { country: string; state: string; postalCode: string },
   _discountCode?: string
 ) {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const __sfx = _shippingAddress;
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const __dc = _discountCode;
+  void _discountCode; // placeholder — discount provider integration point
   let subtotalCents = 0;
   const lineItems: Array<{
     productId: string;
@@ -42,6 +53,7 @@ export function calculatePricing(
     lineTotalCents: number;
     image?: string;
     preorderEstimate: string;
+    weight?: string;
   }> = [];
 
   for (const item of items) {
@@ -71,14 +83,24 @@ export function calculatePricing(
       lineTotalCents: lineTotal,
       image: product.images[0],
       preorderEstimate: `Approximately ${product.preorderEstimateWeeks} weeks`,
+      weight: product.productWeight,
     });
   }
 
-  // Shipping: flat $9.99 for MVP
-  const shippingCents = 999;
+  const address: { country: string; state: string; postalCode: string } =
+    shippingAddress ?? { country: "US", state: "", postalCode: "" };
 
-  // Tax: simplified 8% for MVP (real implementation would use a tax service)
-  const taxCents = Math.round(subtotalCents * 0.08);
+  // Shipping and tax via the configured providers
+  const [shippingRate, tax] = await Promise.all([
+    shippingProvider.calculateRate({
+      items: lineItems.map((li) => ({ weight: li.weight, quantity: li.quantity })),
+      shippingAddress: address,
+    }),
+    taxProvider.calculateTax({ subtotalCents, shippingAddress: address }),
+  ]);
+
+  const shippingCents = shippingRate.rateCents;
+  const taxCents = tax.taxCents;
 
   // Discount: placeholder for future implementation
   const discountCents = 0;
@@ -92,6 +114,8 @@ export function calculatePricing(
     shippingCents,
     taxCents,
     totalCents,
+    shippingCarrier: shippingRate.carrier,
+    shippingEstimatedDays: shippingRate.estimatedDays,
   };
 }
 
@@ -105,7 +129,11 @@ export async function createOrder(params: {
   discountCode?: string;
   storeId: string;
 }) {
-  const pricing = calculatePricing(params.items, undefined, params.discountCode);
+  const pricing = await calculatePricing(
+    params.items,
+    params.shippingAddress as { country: string; state: string; postalCode: string } | undefined,
+    params.discountCode
+  );
 
   const publicOrderNumber = generateOrderNumber();
 

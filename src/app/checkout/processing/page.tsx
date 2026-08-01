@@ -126,7 +126,7 @@ function ProcessingContent() {
             Taking Longer Than Expected
           </h1>
           <p className="text-sm text-text-gray mb-4">
-            Your payment is still being processed. You&apos;ll receive a confirmation email at the address you provided.
+            Your payment is still being processed. You&apos;ll receive an order confirmation.
           </p>
           <p className="text-xs text-text-gray/50 mb-6">
             Order: {orderNumber} — If you don&apos;t hear from us within 30 minutes, please contact support.

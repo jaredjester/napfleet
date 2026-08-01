@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unused-vars, prefer-const */
 import type { CommerceProvider, CommerceProduct, CommerceCart, ReviewProvider, NewsletterProvider } from "./types";
 import { products as mockProducts } from "@/content/products";
+import { mockNewsletterProvider } from "@/lib/newsletter/mock";
 
 const products: CommerceProduct[] = mockProducts;
 
@@ -98,8 +99,6 @@ export const mockReviews: ReviewProvider = {
   },
 };
 
-export const mockNewsletter: NewsletterProvider = {
-  async subscribe(_email: string) {
-    return { success: false, error: "Newsletter provider not configured" };
-  },
-};
+// Delegate to the working newsletter mock (see @/lib/newsletter).
+// Kept as a re-export for any consumers still importing from commerce.
+export const mockNewsletter: NewsletterProvider = mockNewsletterProvider;

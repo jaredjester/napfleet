@@ -129,6 +129,7 @@ model Payment {
   networkFeeAmount            String?
   fraudProtectionStatus       String   @default("NOT_REVIEWED")
   fraudProtectionReason       String?
+  settlementMismatchReason    String?
   chargebackIndemnified       Boolean?
   threeDSStatus               String?
   avsStatus                   String?

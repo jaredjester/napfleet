@@ -40,11 +40,19 @@ export default function CheckoutPage() {
     setPreparing(true);
     setError("");
 
+    // Idempotency key: if this request is retried, the server returns the
+    // same order instead of creating a duplicate.
+    const clientIdempotencyKey =
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `checkout_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+
     try {
       const res = await fetch("/api/checkout/prepare", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          clientIdempotencyKey,
           items: items.map((l) => ({
             productId: l.productHandle,
             variantId: l.variantId,
@@ -327,56 +335,24 @@ export default function CheckoutPage() {
               </div>
             </div>
           ) : (
-            /* Test mode — Coinflow not configured */
-            <div className="space-y-3">
-              <div className="border border-signal-orange/30 bg-signal-orange/5 px-4 py-3">
-                <p className="text-xs font-display font-bold uppercase tracking-[0.1em] text-signal-orange">
-                  Test Mode — Coinflow not configured
-                </p>
-                <p className="text-xs text-text-gray mt-1">
-                  Set NEXT_PUBLIC_COINFLOW_MERCHANT_ID and COINFLOW_API_KEY for live card processing.
-                </p>
-              </div>
-
-              <div className="border border-charcoal/10 p-6 space-y-4">
-                <div>
-                  <label className="block text-xs font-display uppercase tracking-[0.15em] text-text-gray font-bold mb-1">
-                    Card Number (test)
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="4242 4242 4242 4242"
-                    disabled
-                    className="w-full border border-charcoal/20 px-3 py-2.5 text-sm bg-cream/50 text-text-gray/50"
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-display uppercase tracking-[0.15em] text-text-gray font-bold mb-1">
-                      Expiry
-                    </label>
-                    <input type="text" placeholder="MM/YY" disabled className="w-full border border-charcoal/20 px-3 py-2.5 text-sm bg-cream/50 text-text-gray/50" />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-display uppercase tracking-[0.15em] text-text-gray font-bold mb-1">
-                      CVC
-                    </label>
-                    <input type="text" placeholder="123" disabled className="w-full border border-charcoal/20 px-3 py-2.5 text-sm bg-cream/50 text-text-gray/50" />
-                  </div>
-                </div>
-              </div>
-
-              <Button
-                variant="primary"
-                size="lg"
-                className="w-full"
-                onClick={() => router.push(`/checkout/processing?order=${checkoutData.orderNumber}`)}
-              >
-                Place Order (Test Mode) — {formatPrice(checkoutData.displayOrder.totalCents)}
-              </Button>
-              <p className="text-[10px] text-text-gray/50 text-center">
-                No real payment will be processed. Order will be created for testing.
+            /* Checkout unavailable — no test mode fallback */
+            <div className="border border-charcoal/10 p-8 text-center bg-cream">
+              <Icon name="x-circle" className="mx-auto mb-3 text-text-gray/30" size={32} />
+              <p className="font-display font-bold uppercase tracking-[0.1em] text-charcoal text-sm">
+                Checkout Temporarily Unavailable
               </p>
+              <p className="text-xs text-text-gray mt-2 max-w-sm mx-auto">
+                We can&apos;t process payments right now. Please try again shortly, or get in touch and
+                we&apos;ll take care of you.
+              </p>
+              <div className="flex flex-col sm:flex-row justify-center gap-3 mt-6">
+                <Button variant="outline" size="md" onClick={() => setStep("shipping")}>
+                  Back to Shipping
+                </Button>
+                <Button variant="primary" size="md" href="/contact">
+                  Contact Us
+                </Button>
+              </div>
             </div>
           )}
 

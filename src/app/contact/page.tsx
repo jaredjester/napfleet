@@ -16,9 +16,9 @@ const TOPICS = [
 ];
 
 /**
- * Contact form. Client-side validation only until a backend form
- * endpoint exists. No invented address or phone number — contact
- * channels will be confirmed before launch.
+ * Contact form. Client-side validation is a first pass; the server
+ * validates authoritatively via POST /api/contact. No invented address
+ * or phone number — contact channels will be confirmed before launch.
  */
 export default function ContactPage() {
   const [name, setName] = useState("");
@@ -29,6 +29,7 @@ export default function ContactPage() {
   const [consent, setConsent] = useState(false);
   const [honeypot, setHoneypot] = useState("");
   const [errors, setErrors] = useState<FormErrors>({});
+  const [serverError, setServerError] = useState("");
   const [status, setStatus] = useState<"idle" | "submitting" | "success" | "error">("idle");
 
   const validate = (): FormErrors => {
@@ -58,8 +59,9 @@ export default function ContactPage() {
     event.preventDefault();
     setStatus("idle");
     setErrors({});
+    setServerError("");
 
-    // Honeypot: silently accept without processing.
+    // Honeypot: silently accept without processing (server enforces too).
     if (honeypot) {
       setStatus("success");
       return;
@@ -74,16 +76,50 @@ export default function ContactPage() {
 
     setStatus("submitting");
     try {
-      // No backend endpoint yet — simulate a network round trip.
-      // Replace with a real form submission when a provider is configured.
-      await new Promise((resolve) => setTimeout(resolve, 600));
-      setStatus("success");
-      setName("");
-      setEmail("");
-      setOrderNumber("");
-      setMessage("");
-      setConsent(false);
+      const response = await fetch("/api/contact", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: name.trim(),
+          email: email.trim(),
+          orderNumber: orderNumber.trim() || undefined,
+          topic,
+          message: message.trim(),
+          consent,
+          website: honeypot,
+        }),
+      });
+
+      if (response.ok) {
+        setStatus("success");
+        setName("");
+        setEmail("");
+        setOrderNumber("");
+        setMessage("");
+        setConsent(false);
+        return;
+      }
+
+      const payload = (await response.json().catch(() => null)) as {
+        error?: string;
+        errors?: Record<string, string>;
+      } | null;
+
+      if (response.status === 429) {
+        setServerError("Too many messages — please wait a minute and try again.");
+      } else if (response.status === 400 && payload?.errors) {
+        const fieldErrors: FormErrors = {};
+        for (const key of ["name", "email", "message"] as const) {
+          if (payload.errors[key]) fieldErrors[key] = payload.errors[key];
+        }
+        setErrors(fieldErrors);
+        setServerError("Please fix the highlighted fields.");
+      } else {
+        setServerError(payload?.error || "Something went wrong sending your message. Please try again.");
+      }
+      setStatus("error");
     } catch {
+      setServerError("Something went wrong sending your message. Please try again.");
       setStatus("error");
     }
   };
@@ -228,9 +264,9 @@ export default function ContactPage() {
           </label>
           {errors.consent && <p className="-mt-2 text-xs text-signal-orange">{errors.consent}</p>}
 
-          {status === "error" && Object.keys(errors).length === 0 && (
-            <p className="text-xs text-signal-orange">
-              Something went wrong sending your message. Please try again.
+          {status === "error" && serverError && (
+            <p className="text-xs text-signal-orange" role="alert">
+              {serverError}
             </p>
           )}
 
