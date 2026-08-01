@@ -216,9 +216,8 @@ export async function POST(request: NextRequest) {
           correlationId,
         },
         chargebackProtectionData: pricing.lineItems.map((li) => ({
-          itemClass: "physical" as const,
           productName: li.title,
-          productType: "physical",
+          productType: "inGameProduct",
           sellingPrice: { valueInCurrency: li.unitPriceCents / 100, currency: "USD" },
           sku: li.sku,
           quantity: li.quantity,
@@ -307,9 +306,8 @@ async function replayCheckout(
         correlationId,
       },
       chargebackProtectionData: order.items.map((item) => ({
-        itemClass: "physical",
         productName: item.productTitleSnapshot,
-        productType: "physical",
+        productType: "inGameProduct",
         sellingPrice: { valueInCurrency: item.unitPriceCents / 100, currency: "USD" },
         sku: item.skuSnapshot,
         quantity: item.quantity,
@@ -438,9 +436,8 @@ async function buildSandboxCheckoutResponse(
         correlationId: `sandbox_${Date.now()}`,
       },
       chargebackProtectionData: displayItems.map((li) => ({
-        itemClass: "physical",
         productName: li.title,
-        productType: "physical",
+        productType: "inGameProduct",
         sellingPrice: { valueInCurrency: li.unitPriceCents / 100, currency: "USD" },
         quantity: li.quantity,
       })),
