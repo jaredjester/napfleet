@@ -84,17 +84,19 @@ export function CartProvider({ children }: { children: ReactNode }) {
           if (!cancelled && rebuilt.lines.length > 0) {
             setItems(rebuilt.lines);
             setSubtotal(rebuilt.subtotal);
-            return;
+          } else if (!cancelled) {
+            // Fallback: use localStorage items directly
+            const validItems = storedItems.filter((l) => l.quantity > 0 && l.price > 0);
+            setItems(validItems);
+            setSubtotal(validItems.reduce((sum, l) => sum + l.price * l.quantity, 0));
           }
         } catch {
           // Provider rebuild failed — fall through to localStorage fallback
-        }
-
-        // Fallback: use localStorage items directly
-        if (!cancelled) {
-          const validItems = storedItems.filter((l) => l.quantity > 0 && l.price > 0);
-          setItems(validItems);
-          setSubtotal(validItems.reduce((sum, l) => sum + l.price * l.quantity, 0));
+          if (!cancelled) {
+            const validItems = storedItems.filter((l) => l.quantity > 0 && l.price > 0);
+            setItems(validItems);
+            setSubtotal(validItems.reduce((sum, l) => sum + l.price * l.quantity, 0));
+          }
         }
       }
 
