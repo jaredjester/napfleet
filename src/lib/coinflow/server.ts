@@ -73,17 +73,24 @@ async function coinflowFetch<T>(
 /**
  * Generate or retrieve a session key for a given payer.
  * Session keys authorize the payer and are valid for 24 hours.
+ *
+ * Uses GET /api/auth/session-key per Coinflow API reference, with
+ * x-coinflow-auth-* headers for the payer identity.
  */
 export async function createSessionKey(
   userId: string
 ): Promise<CoinflowSessionResult> {
+  const merchantId = getMerchantId();
   const result = await coinflowFetch<{
-    sessionKey: string;
+    key: string;
     expiresAt?: string;
-    userId: string;
-  }>("/api/session-key", {
-    method: "POST",
-    body: JSON.stringify({ userId }),
+  }>("/api/auth/session-key", {
+    method: "GET",
+    headers: {
+      "x-coinflow-auth-user-id": userId,
+      "x-coinflow-auth-merchant-id": merchantId,
+      "x-coinflow-auth-blockchain": "solana",
+    } as Record<string, string>,
   });
 
   if (result.error || !result.data) {
@@ -91,7 +98,7 @@ export async function createSessionKey(
   }
 
   return {
-    sessionKey: result.data.sessionKey,
+    sessionKey: result.data.key,
     expiresAt: result.data.expiresAt ? new Date(result.data.expiresAt) : undefined,
   };
 }
