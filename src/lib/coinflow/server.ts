@@ -53,7 +53,7 @@ async function coinflowFetch<T>(
       ...options,
       headers: {
         "Content-Type": "application/json",
-        "x-coinflow-api-key": apiKey,
+        Authorization: apiKey,
         ...options.headers,
       },
     });
