@@ -81,6 +81,19 @@ export function validateAllProducts(products: CommerceProduct[]): { product: str
 }
 
 export function canPublish(product: CommerceProduct): boolean {
+  const isProduction = process.env.COINFLOW_ENV === "prod";
+
+  // In sandbox/development, only block on the most fundamental issues
+  // (no images, no variants, invalid domain). Metafield requirements
+  // are enforced only in production where real orders are taken.
+  if (!isProduction) {
+    const issues = validateProduct(product);
+    const fundamentalErrors = issues.filter(
+      (i) => i.severity === "error" && ["images", "variants", "domain", "price", "title"].includes(i.field)
+    );
+    return fundamentalErrors.length === 0;
+  }
+
   const issues = validateProduct(product);
   return issues.filter((i) => i.severity === "error").length === 0;
 }

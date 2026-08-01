@@ -73,11 +73,18 @@ export function arePoliciesReady(): boolean {
 
 export function canEnableCheckout(): { allowed: boolean; reasons: string[] } {
   const reasons: string[] = [];
-  const policies = getPolicyStatuses();
-  const draftPolicies = policies.filter((p) => p.status === "draft");
+  const isProduction = process.env.COINFLOW_ENV === "prod";
 
-  if (draftPolicies.length > 0) {
-    reasons.push(`${draftPolicies.length} polic${draftPolicies.length === 1 ? "y" : "ies"} still in draft`);
+  // Only hard-block on draft policies in production.
+  // In sandbox/development, allow testing the checkout flow
+  // with draft policies (they remain noindex on the site).
+  if (isProduction) {
+    const policies = getPolicyStatuses();
+    const draftPolicies = policies.filter((p) => p.status === "draft");
+
+    if (draftPolicies.length > 0) {
+      reasons.push(`${draftPolicies.length} polic${draftPolicies.length === 1 ? "y" : "ies"} still in draft`);
+    }
   }
 
   return { allowed: reasons.length === 0, reasons };
