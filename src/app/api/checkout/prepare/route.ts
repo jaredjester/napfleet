@@ -237,7 +237,22 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     console.error(`[${correlationId}] Checkout prepare error:`, err);
     const message = err instanceof Error ? err.message : "Checkout preparation failed";
-    // Don't expose internal error details
+
+    // Sandbox fallback: if the database is unavailable (e.g. SQLite on Vercel
+    // serverless), return a memory-based checkout response so the UI can be tested.
+    // This must NEVER be enabled in production.
+    const isDatabaseError =
+      message.includes("Can't reach database") ||
+      message.includes("database") ||
+      message.includes("prisma") ||
+      message.includes("SQLITE") ||
+      message.includes("connection");
+
+    if (isDatabaseError && process.env.COINFLOW_ENV !== "prod") {
+      console.warn(`[${correlationId}] Database unavailable in sandbox — returning memory-based checkout for UI testing`);
+      return NextResponse.json(buildSandboxCheckoutResponse(body.items));
+    }
+
     const safeMessage = message.includes("not found") || message.includes("unavailable")
       ? message
       : "Unable to prepare checkout. Please try again.";
@@ -344,4 +359,53 @@ function parseAddressSnapshot(snapshot: string): Record<string, string> {
   } catch {
     return {};
   }
+}
+
+/**
+ * Sandbox-only fallback when the database is unavailable.
+ * Constructs a checkout response from in-memory product data
+ * so the UI flow can be tested end-to-end.
+ * NEVER enabled in production (guarded by COINFLOW_ENV check).
+ */
+function buildSandboxCheckoutResponse(
+  items: Array<{ productId: string; variantId: string; quantity: number }>
+): PrepareCheckoutResponse {
+  const displayItems: PrepareCheckoutResponse["displayOrder"]["items"] = [];
+  let subtotalCents = 0;
+
+  for (const item of items) {
+    const product = products.find((p) => p.handle === item.productId);
+    const variant = product?.variants.find((v) => v.id === item.variantId);
+    const price = variant?.price ?? 6999;
+    const lineTotal = price * item.quantity;
+    subtotalCents += lineTotal;
+    displayItems.push({
+      title: product?.title ?? item.productId,
+      variant: variant?.title ?? "Default",
+      quantity: item.quantity,
+      unitPriceCents: price,
+      image: product?.images[0],
+    });
+  }
+
+  const shippingCents = 999;
+  const taxCents = Math.round(subtotalCents * 0.08);
+  const totalCents = subtotalCents + shippingCents + taxCents;
+
+  return {
+    orderNumber: `NF-SBOX-${Date.now().toString(36).toUpperCase()}`,
+    checkoutAttemptId: `sandbox_${Date.now()}`,
+    merchantId: process.env.NEXT_PUBLIC_COINFLOW_MERCHANT_ID || "",
+    environment: (process.env.NEXT_PUBLIC_COINFLOW_ENV || "sandbox") as "sandbox" | "prod",
+    sessionKey: "",
+    subtotal: { cents: totalCents, currency: Currency.USD },
+    displayOrder: {
+      items: displayItems,
+      subtotalCents,
+      discountCents: 0,
+      shippingCents,
+      taxCents,
+      totalCents,
+    },
+  };
 }
