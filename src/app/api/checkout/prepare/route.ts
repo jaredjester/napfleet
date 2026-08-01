@@ -52,14 +52,20 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Read body once — needed in both try and catch scopes
+  const rawText = await request.text();
+  let body: PrepareCheckoutInput;
+  try {
+    body = JSON.parse(rawText) as PrepareCheckoutInput;
+  } catch {
+    return NextResponse.json({ error: "Invalid request body", correlationId }, { status: 400 });
+  }
+
   try {
     // Validate body size
-    const contentLength = parseInt(request.headers.get("content-length") || "0", 10);
-    if (contentLength > MAX_BODY_SIZE) {
+    if (rawText.length > MAX_BODY_SIZE) {
       return NextResponse.json({ error: "Request too large", correlationId }, { status: 413 });
     }
-
-    const body = (await request.json()) as PrepareCheckoutInput;
 
     // Validate required fields
     if (!body.items?.length || !body.customer?.email || !body.shippingAddress) {
@@ -250,7 +256,9 @@ export async function POST(request: NextRequest) {
 
     if (isDatabaseError && process.env.COINFLOW_ENV !== "prod") {
       console.warn(`[${correlationId}] Database unavailable in sandbox — returning memory-based checkout for UI testing`);
-      return NextResponse.json(buildSandboxCheckoutResponse(body.items));
+      if (body.items?.length > 0) {
+        return NextResponse.json(buildSandboxCheckoutResponse(body.items));
+      }
     }
 
     const safeMessage = message.includes("not found") || message.includes("unavailable")
