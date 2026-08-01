@@ -257,7 +257,8 @@ export async function POST(request: NextRequest) {
     if (isDatabaseError && process.env.COINFLOW_ENV !== "prod") {
       console.warn(`[${correlationId}] Database unavailable in sandbox — returning memory-based checkout for UI testing`);
       if (body.items?.length > 0) {
-        return NextResponse.json(buildSandboxCheckoutResponse(body.items));
+        const fallback = await buildSandboxCheckoutResponse(body);
+        return NextResponse.json(fallback);
       }
     }
 
@@ -375,13 +376,13 @@ function parseAddressSnapshot(snapshot: string): Record<string, string> {
  * so the UI flow can be tested end-to-end.
  * NEVER enabled in production (guarded by COINFLOW_ENV check).
  */
-function buildSandboxCheckoutResponse(
-  items: Array<{ productId: string; variantId: string; quantity: number }>
-): PrepareCheckoutResponse {
+async function buildSandboxCheckoutResponse(
+  body: PrepareCheckoutInput
+): Promise<PrepareCheckoutResponse> {
   const displayItems: PrepareCheckoutResponse["displayOrder"]["items"] = [];
   let subtotalCents = 0;
 
-  for (const item of items) {
+  for (const item of body.items) {
     const product = products.find((p) => p.handle === item.productId);
     const variant = product?.variants.find((v) => v.id === item.variantId);
     const price = variant?.price ?? 6999;
@@ -400,12 +401,53 @@ function buildSandboxCheckoutResponse(
   const taxCents = Math.round(subtotalCents * 0.08);
   const totalCents = subtotalCents + shippingCents + taxCents;
 
+  // Try to generate Coinflow session key and JWT even in sandbox fallback
+  let sessionKey = "";
+  let jwtToken: string | undefined;
+  const payerId = `napfleet_payer_${Buffer.from(body.customer.email.toLowerCase().trim()).toString("base64url").slice(0, 32)}`;
+
+  try {
+    const sessionResult = await createSessionKey(payerId);
+    sessionKey = sessionResult.sessionKey;
+
+    const jwtResult = await createCheckoutJwt({
+      subtotal: { cents: totalCents, currency: Currency.USD },
+      customerInfo: {
+        email: body.customer.email,
+        firstName: body.customer.firstName,
+        lastName: body.customer.lastName,
+        address: body.shippingAddress.line1,
+        city: body.shippingAddress.city,
+        state: body.shippingAddress.state,
+        zip: body.shippingAddress.postalCode,
+        country: body.shippingAddress.country,
+      },
+      webhookInfo: {
+        orderNumber: `NF-SBOX-${Date.now().toString(36).toUpperCase()}`,
+        correlationId: `sandbox_${Date.now()}`,
+      },
+      chargebackProtectionData: displayItems.map((li) => ({
+        itemClass: "physical",
+        name: li.title,
+        quantity: li.quantity,
+        unitPrice: { valueInCurrency: li.unitPriceCents / 100, currency: "USD" },
+      })),
+      settlementType: "USDC",
+      sessionKey,
+    });
+    jwtToken = jwtResult;
+    console.log("[sandbox] Coinflow session key + JWT generated successfully");
+  } catch (err) {
+    console.warn("[sandbox] Coinflow session key generation failed (keys may not be configured):", err);
+  }
+
   return {
     orderNumber: `NF-SBOX-${Date.now().toString(36).toUpperCase()}`,
     checkoutAttemptId: `sandbox_${Date.now()}`,
     merchantId: process.env.NEXT_PUBLIC_COINFLOW_MERCHANT_ID || "",
     environment: (process.env.NEXT_PUBLIC_COINFLOW_ENV || "sandbox") as "sandbox" | "prod",
-    sessionKey: "",
+    sessionKey,
+    jwtToken,
     subtotal: { cents: totalCents, currency: Currency.USD },
     displayOrder: {
       items: displayItems,
